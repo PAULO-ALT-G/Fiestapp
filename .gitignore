@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Xcode (datos personales de cada usuario)
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# Builds
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
