@@ -2,31 +2,23 @@
 //  Fiestapp
 
 import SwiftUI
-import SwiftData
 
 struct AmigosView: View {
-    @Environment(Navegador.self) private var navegador
-    @Environment(\.modelContext) private var contexto
-
-    @Query(sort: \Amigo.nombre) private var amigos: [Amigo]
-
-    @State private var agregando = false
-    @State private var editando: Amigo?
-    @State private var busqueda = ""
+    @EnvironmentObject private var navegador: Navegador
+    @EnvironmentObject private var store: FiestappStore
+    @StateObject private var viewModel: AmigosViewModel
 
     private let columnas = [GridItem(.adaptive(minimum: 84), spacing: 12)]
 
-    private var filtrados: [Amigo] {
-        let texto = busqueda.limpio
-        guard !texto.isEmpty else { return amigos }
-        return amigos.filter { $0.nombre.localizedCaseInsensitiveContains(texto) }
+    init(store: FiestappStore) {
+        _viewModel = StateObject(wrappedValue: AmigosViewModel(store: store))
     }
 
     var body: some View {
         PantallaFiesta(barra: [
             BotonBarra(titulo: "Inicio", icono: "arrow.left") { navegador.atras() },
-            BotonBarra(titulo: "Amigos", icono: "person.2.fill", activo: true) {},
-            BotonBarra(titulo: "Agregar", icono: "person.badge.plus") { agregando = true }
+            BotonBarra(titulo: "Amigos", icono: "person.2.fill", activo: true),
+            BotonBarra(titulo: "Agregar", icono: "person.badge.plus") { viewModel.agregando = true }
         ]) {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Mis").font(.fiesta(13))
@@ -36,19 +28,19 @@ struct AmigosView: View {
             .padding(.top, 20)
         } contenido: {
             VStack(spacing: 14) {
-                Text(amigos.count == 1 ? "1 amigo" : "\(amigos.count) amigos")
+                Text(viewModel.contador)
                     .font(.fiesta(14))
                     .foregroundStyle(Tema.texto.opacity(0.7))
                     .frame(maxWidth: .infinity)
 
-                if amigos.isEmpty {
+                if viewModel.amigos.isEmpty {
                     estadoVacio
                 } else {
                     buscador
 
                     LazyVGrid(columns: columnas, spacing: 16) {
-                        ForEach(filtrados) { amigo in
-                            Button { editando = amigo } label: {
+                        ForEach(viewModel.filtrados) { amigo in
+                            Button { viewModel.editando = amigo } label: {
                                 VStack(spacing: 6) {
                                     AvatarView(nombre: amigo.nombre, foto: amigo.foto, tamano: 64, borde: Tema.teal)
                                     Text(amigo.nombre)
@@ -61,7 +53,7 @@ struct AmigosView: View {
                             .buttonStyle(.plain)
                         }
 
-                        Button { agregando = true } label: {
+                        Button { viewModel.agregando = true } label: {
                             VStack(spacing: 6) {
                                 Image(systemName: "plus")
                                     .font(.system(size: 26, weight: .semibold))
@@ -86,25 +78,15 @@ struct AmigosView: View {
                 }
             }
         }
-        .sheet(isPresented: $agregando) {
+        .sheet(isPresented: $viewModel.agregando) {
             InvitadoSheet(titulo: "Nuevo amigo", nombre: "", foto: nil,
-                          alGuardar: { nombre, foto in
-                              contexto.insert(Amigo(nombre: nombre, foto: foto))
-                              try? contexto.save()
-                          },
+                          alGuardar: { nombre, foto in viewModel.agregar(nombre: nombre, foto: foto) },
                           textoCampo: "Nombre de tu amigo")
         }
-        .sheet(item: $editando) { amigo in
+        .sheet(item: $viewModel.editando) { amigo in
             InvitadoSheet(titulo: "Editar amigo", nombre: amigo.nombre, foto: amigo.foto,
-                          alGuardar: { nombre, foto in
-                              amigo.nombre = nombre
-                              amigo.foto = foto
-                              try? contexto.save()
-                          },
-                          alEliminar: {
-                              contexto.delete(amigo)
-                              try? contexto.save()
-                          },
+                          alGuardar: { nombre, foto in viewModel.actualizar(amigo, nombre: nombre, foto: foto) },
+                          alEliminar: { viewModel.eliminar(amigo) },
                           textoEliminar: "Quitar de mis amigos",
                           textoCampo: "Nombre de tu amigo")
         }
@@ -114,9 +96,9 @@ struct AmigosView: View {
         HStack {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(Tema.teal)
-            TextField("Buscar amigo", text: $busqueda)
-            if !busqueda.isEmpty {
-                Button { busqueda = "" } label: {
+            TextField("Buscar amigo", text: $viewModel.busqueda)
+            if !viewModel.busqueda.isEmpty {
+                Button { viewModel.busqueda = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
             }
@@ -137,7 +119,7 @@ struct AmigosView: View {
             Text("Guárdalos una vez con su nombre y foto, y luego solo los palomeas al invitar.")
                 .font(.fiesta(14))
                 .foregroundStyle(.secondary)
-            Button { agregando = true } label: {
+            Button { viewModel.agregando = true } label: {
                 Label("Agregar amigo", systemImage: "person.badge.plus")
                     .font(.fiesta(15, .semibold))
                     .foregroundStyle(.white)
@@ -156,9 +138,10 @@ struct AmigosView: View {
 }
 
 #Preview {
-    NavigationStack {
-        AmigosView()
+    let store = DatosEjemplo.store()
+    return NavigationStack {
+        AmigosView(store: store)
     }
-    .environment(Navegador())
-    .modelContainer(DatosEjemplo.contenedor())
+    .environmentObject(store)
+    .environmentObject(Navegador())
 }

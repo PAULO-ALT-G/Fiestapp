@@ -2,7 +2,6 @@
 //  Fiestapp
 
 import SwiftUI
-import SwiftData
 
 @main
 struct FiestappApp: App {
@@ -11,14 +10,5 @@ struct FiestappApp: App {
             RootView()
                 .tint(Tema.teal)
         }
-        .modelContainer(for: [
-            Perfil.self,
-            Amigo.self,
-            Evento.self,
-            Participante.self,
-            Gasto.self,
-            Parte.self,
-            Pago.self
-        ])
     }
 }

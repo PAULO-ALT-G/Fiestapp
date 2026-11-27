@@ -2,18 +2,18 @@
 //  Fiestapp
 
 import Foundation
-import SwiftData
 
 struct Transferencia: Identifiable {
     let de: Participante
     let para: Participante
     let montoCentavos: Int
 
-    var id: String { "\(de.persistentModelID.hashValue)-\(para.persistentModelID.hashValue)" }
+    var id: String { "\(de.id)-\(para.id)" }
 }
 
 enum Balance {
     // MARK: División de un gasto
+
     static func dividirIguales(totalCentavos: Int, entre personas: Int) -> [Int] {
         guard personas > 0 else { return [] }
         let base = totalCentavos / personas
@@ -26,39 +26,33 @@ enum Balance {
     }
 
     // MARK: Saldos netos
-    static func netos(_ evento: Evento) -> [PersistentIdentifier: Int] {
-        var neto: [PersistentIdentifier: Int] = [:]
+
+    static func netos(_ evento: Evento) -> [UUID: Int] {
+        var neto: [UUID: Int] = [:]
         for persona in evento.participantes {
-            neto[persona.persistentModelID] = 0
+            neto[persona.id] = 0
         }
 
         for gasto in evento.gastos {
-            guard let pagador = gasto.pagador else { continue }
-            for parte in gasto.partes {
-                guard let deudor = parte.participante,
-                      deudor.persistentModelID != pagador.persistentModelID,
-                      !parte.saldada else { continue }
-                neto[pagador.persistentModelID, default: 0] += parte.montoCentavos
-                neto[deudor.persistentModelID, default: 0] -= parte.montoCentavos
+            guard let pagadorID = gasto.pagadorID else { continue }
+            for parte in gasto.partes where parte.participanteID != pagadorID && !parte.saldada {
+                neto[pagadorID, default: 0] += parte.montoCentavos
+                neto[parte.participanteID, default: 0] -= parte.montoCentavos
             }
         }
 
         for pago in evento.pagos {
-            guard let de = pago.de, let para = pago.para else { continue }
-            neto[de.persistentModelID, default: 0] += pago.montoCentavos
-            neto[para.persistentModelID, default: 0] -= pago.montoCentavos
+            neto[pago.deID, default: 0] += pago.montoCentavos
+            neto[pago.paraID, default: 0] -= pago.montoCentavos
         }
 
         return neto
     }
 
     // MARK: Simplificación de deudas
+
     static func transferencias(_ evento: Evento) -> [Transferencia] {
         let saldos = netos(evento)
-        var porID: [PersistentIdentifier: Participante] = [:]
-        for persona in evento.participantes {
-            porID[persona.persistentModelID] = persona
-        }
 
         var deudores = saldos.filter { $0.value < 0 }
             .map { (id: $0.key, monto: -$0.value) }
@@ -72,7 +66,9 @@ enum Balance {
         var j = 0
         while i < deudores.count && j < acreedores.count {
             let monto = min(deudores[i].monto, acreedores[j].monto)
-            if monto > 0, let de = porID[deudores[i].id], let para = porID[acreedores[j].id] {
+            if monto > 0,
+               let de = evento.participante(deudores[i].id),
+               let para = evento.participante(acreedores[j].id) {
                 resultado.append(Transferencia(de: de, para: para, montoCentavos: monto))
             }
             deudores[i].monto -= monto
@@ -84,36 +80,31 @@ enum Balance {
     }
 
     // MARK: Estado por gasto
-    static func parteLiquidada(_ parte: Parte, netos: [PersistentIdentifier: Int]) -> Bool {
-        guard let persona = parte.participante else { return true }
-        if parte.gasto?.pagador?.persistentModelID == persona.persistentModelID { return true }
+
+    static func parteLiquidada(_ parte: Parte, en gasto: Gasto, netos: [UUID: Int]) -> Bool {
+        if parte.participanteID == gasto.pagadorID { return true }
         if parte.saldada { return true }
-        return (netos[persona.persistentModelID] ?? 0) >= 0
+        return (netos[parte.participanteID] ?? 0) >= 0
     }
 
-    static func partesPendientes(_ gasto: Gasto, netos: [PersistentIdentifier: Int]) -> [Parte] {
-        gasto.partes
-            .filter { !parteLiquidada($0, netos: netos) }
-            .sorted { ($0.participante?.creadoEn ?? .now) < ($1.participante?.creadoEn ?? .now) }
+    static func partesPendientes(_ gasto: Gasto, netos: [UUID: Int]) -> [Parte] {
+        gasto.partes.filter { !parteLiquidada($0, en: gasto, netos: netos) }
     }
 
     static func totalPendiente(_ evento: Evento) -> Int {
         transferencias(evento).reduce(0) { $0 + $1.montoCentavos }
     }
 
-    static func participaEnCuentas(_ persona: Participante, evento: Evento) -> Bool {
-        let id = persona.persistentModelID
+    static func participaEnCuentas(_ personaID: UUID, evento: Evento) -> Bool {
         let enGastos = evento.gastos.contains { gasto in
-            gasto.pagador?.persistentModelID == id ||
-            gasto.partes.contains { $0.participante?.persistentModelID == id }
+            gasto.pagadorID == personaID || gasto.partes.contains { $0.participanteID == personaID }
         }
-        let enPagos = evento.pagos.contains {
-            $0.de?.persistentModelID == id || $0.para?.persistentModelID == id
-        }
+        let enPagos = evento.pagos.contains { $0.deID == personaID || $0.paraID == personaID }
         return enGastos || enPagos
     }
 
     // MARK: Resumen para compartir
+
     static func resumen(_ evento: Evento) -> String {
         var lineas: [String] = []
         lineas.append("🎉 \(evento.nombre) — Fiestapp")
@@ -122,7 +113,7 @@ enum Balance {
         lineas.append("")
         lineas.append("Gastos:")
         for gasto in evento.gastosOrdenados {
-            let pagador = gasto.pagador?.nombre ?? "?"
+            let pagador = evento.participante(gasto.pagadorID)?.nombre ?? "?"
             lineas.append("• \(gasto.concepto): \(Dinero.texto(gasto.montoCentavos)) (pagó \(pagador))")
         }
         lineas.append("Total: \(Dinero.texto(evento.totalCentavos))")
@@ -141,4 +132,3 @@ enum Balance {
         return lineas.joined(separator: "\n")
     }
 }
-

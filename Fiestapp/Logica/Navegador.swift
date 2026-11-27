@@ -1,19 +1,18 @@
 //  Navegador.swift
 //  Fiestapp
 
-import SwiftUI
-import SwiftData
+import Foundation
+import Combine
 
 enum Ruta: Hashable {
-    case detalle(Evento)
-    case editarEvento(Evento?)
-    case gasto(Evento, Gasto?)
+    case detalle(UUID)
+    case editarEvento(UUID?)
+    case gasto(evento: UUID, gasto: UUID?)
     case amigos
 }
 
-@Observable
-final class Navegador {
-    var ruta: [Ruta] = []
+final class Navegador: ObservableObject {
+    @Published var ruta: [Ruta] = []
 
     func ir(_ destino: Ruta) {
         ruta.append(destino)

@@ -2,28 +2,35 @@
 //  Fiestapp
 
 import SwiftUI
-import SwiftData
 
 struct EventoDetalleView: View {
-    @Bindable var evento: Evento
+    @EnvironmentObject private var navegador: Navegador
+    @EnvironmentObject private var store: FiestappStore
+    @StateObject private var viewModel: EventoDetalleViewModel
 
-    @Environment(Navegador.self) private var navegador
-    @Environment(\.modelContext) private var contexto
-
-    @State private var agregandoInvitado = false
+    init(eventoID: UUID, store: FiestappStore) {
+        _viewModel = StateObject(wrappedValue: EventoDetalleViewModel(eventoID: eventoID, store: store))
+    }
 
     var body: some View {
+        if let evento = viewModel.evento {
+            contenido(evento)
+        } else {
+            ContentUnavailableView("Este evento ya no existe", systemImage: "calendar.badge.exclamationmark")
+        }
+    }
+
+    private func contenido(_ evento: Evento) -> some View {
         PantallaFiesta(imagen: evento.portada, barra: [
             BotonBarra(titulo: "Inicio", icono: "arrow.left") { navegador.inicio() },
-            BotonBarra(titulo: "Evento", icono: evento.tipo.icono, activo: true) {},
-            BotonBarra(titulo: "Editar", icono: "pencil") { navegador.ir(.editarEvento(evento)) }
+            BotonBarra(titulo: "Evento", icono: evento.tipo.icono, activo: true),
+            BotonBarra(titulo: "Editar", icono: "pencil", destino: .editarEvento(evento.id))
         ]) {
-            encabezado
+            encabezado(evento)
         } contenido: {
             VStack(alignment: .leading, spacing: 18) {
-                if evento.cerrado || evento.esPasado() {
-                    Label(evento.cerrado ? "Cuentas cerradas" : "Este evento ya pasó",
-                          systemImage: evento.cerrado ? "lock.fill" : "clock.arrow.circlepath")
+                if let estado = viewModel.estado(de: evento) {
+                    Label(estado, systemImage: evento.cerrado ? "lock.fill" : "clock.arrow.circlepath")
                         .font(.fiesta(14, .medium))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
@@ -42,10 +49,14 @@ struct EventoDetalleView: View {
                 MapaLugar(lugar: evento.lugar, latitud: evento.latitud, longitud: evento.longitud)
                 LineaSeccion()
 
-                invitados
+                invitados(evento)
 
                 ListaGastos(evento: evento)
-                BalanceGrupo(evento: evento)
+                BalanceGrupo(evento: evento, acciones: AccionesCuentas(
+                    alternarParte: { gastoID, personaID in viewModel.alternarParte(gastoID: gastoID, participanteID: personaID) },
+                    saldar: { viewModel.saldar($0) },
+                    deshacerPago: { viewModel.deshacerPago($0) }
+                ))
 
                 ShareLink(item: Balance.resumen(evento)) {
                     Label("Compartir cuentas", systemImage: "square.and.arrow.up")
@@ -58,26 +69,24 @@ struct EventoDetalleView: View {
                 .padding(.horizontal, 16)
             }
         }
-        .sheet(isPresented: $agregandoInvitado) {
-            ElegirInvitadosSheet(yaInvitados: evento.participantes.map(\.nombre)) { nuevos in
-                for nuevo in nuevos {
-                    let persona = Participante(nombre: nuevo.nombre, foto: nuevo.foto)
-                    contexto.insert(persona)
-                    persona.evento = evento
-                }
-                try? contexto.save()
+        .sheet(isPresented: $viewModel.agregandoInvitado) {
+            ElegirInvitadosSheet(store: store, yaInvitados: evento.participantes.map(\.nombre)) { nuevos in
+                viewModel.agregarInvitados(nuevos)
             }
         }
     }
 
-    private var encabezado: some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func encabezado(_ evento: Evento) -> some View {
+        let fechas = viewModel.textoFecha(evento)
+
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Detalles").font(.fiesta(13))
                 Spacer()
-                Button { navegador.ir(.editarEvento(evento)) } label: {
+                NavigationLink(value: Ruta.editarEvento(evento.id)) {
                     Image(systemName: "pencil")
                         .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
                 }
             }
             Text(evento.nombre)
@@ -95,9 +104,9 @@ struct EventoDetalleView: View {
             }
             .padding(.top, 6)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Inicio: \(Formato.diaMesLargo(evento.fecha)) · \(Formato.hora(evento.fecha))")
-                if evento.fin > evento.fecha {
-                    Text("Fin: \(Formato.diaMesLargo(evento.fin)) · \(Formato.hora(evento.fin))")
+                Text(fechas.inicio)
+                if let fin = fechas.fin {
+                    Text(fin)
                 }
             }
             .font(.fiesta(15, .semibold))
@@ -106,14 +115,14 @@ struct EventoDetalleView: View {
         .foregroundStyle(.white)
     }
 
-    private var invitados: some View {
+    private func invitados(_ evento: Evento) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Invitados:")
                 .font(.fiesta(17, .medium))
                 .foregroundStyle(Tema.texto)
             HStack(spacing: 8) {
                 if !evento.cerrado {
-                    BotonMas { agregandoInvitado = true }
+                    BotonMas { viewModel.agregandoInvitado = true }
                 }
                 AvataresApilados(personas: evento.participantesOrdenados, tamano: 44, maximo: 7)
                 Spacer()
@@ -127,10 +136,10 @@ struct EventoDetalleView: View {
 }
 
 #Preview {
-    let contenedor = DatosEjemplo.contenedor()
+    let store = DatosEjemplo.store()
     return NavigationStack {
-        EventoDetalleView(evento: DatosEjemplo.evento(en: contenedor))
+        EventoDetalleView(eventoID: DatosEjemplo.eventoConGastos(en: store), store: store)
     }
-    .environment(Navegador())
-    .modelContainer(contenedor)
+    .environmentObject(store)
+    .environmentObject(Navegador())
 }

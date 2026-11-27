@@ -1,0 +1,29 @@
+{
+  "tipos": [
+    {
+      "tipo": "Comida",
+      "descripcion": "Comidas, cenas y desayunos con amigos",
+      "conceptos": ["Comida", "Bebidas", "Postre", "Propina", "Estacionamiento"]
+    },
+    {
+      "tipo": "Fiesta",
+      "descripcion": "Cumpleaños, reuniones y fiestas en casa",
+      "conceptos": ["Pastel", "Bebidas", "Botanas", "Hielo", "Decoración", "Música"]
+    },
+    {
+      "tipo": "Viaje",
+      "descripcion": "Viajes y salidas fuera de la ciudad",
+      "conceptos": ["Gasolina", "Casetas", "Hospedaje", "Súper", "Comida", "Entradas"]
+    },
+    {
+      "tipo": "Salida",
+      "descripcion": "Antros, conciertos, cine y planes de un rato",
+      "conceptos": ["Uber", "Entradas", "Bebidas", "Comida", "Estacionamiento"]
+    },
+    {
+      "tipo": "Otro",
+      "descripcion": "Cualquier otro plan con el grupo",
+      "conceptos": ["Comida", "Transporte", "Bebidas", "Otro"]
+    }
+  ]
+}

@@ -2,7 +2,12 @@
 //  Fiestapp
 
 import SwiftUI
-import SwiftData
+
+struct AccionesCuentas {
+    let alternarParte: (_ gastoID: UUID, _ participanteID: UUID) -> Void
+    let saldar: (Transferencia) -> Void
+    let deshacerPago: (UUID) -> Void
+}
 
 // MARK: - Gastos Registrados
 
@@ -10,8 +15,6 @@ struct ListaGastos: View {
     let evento: Evento
     var editable: Bool = true
     var abierta: Bool = true
-
-    @Environment(Navegador.self) private var navegador
 
     var body: some View {
         SeccionDesplegable("Gastos Registrados", abierta: abierta) {
@@ -21,28 +24,18 @@ struct ListaGastos: View {
             }
 
             ForEach(evento.gastosOrdenados) { gasto in
-                Button {
-                    if editable { navegador.ir(.gasto(evento, gasto)) }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(gasto.concepto).lineLimit(1)
-                        if gasto.fotoTicket != nil {
-                            Image(systemName: "paperclip")
-                                .font(.system(size: 11))
-                                .foregroundStyle(Tema.tealOscuro)
-                        }
-                        Spacer()
-                        Text(Dinero.texto(gasto.montoCentavos))
+                if editable {
+                    NavigationLink(value: Ruta.gasto(evento: evento.id, gasto: gasto.id)) {
+                        filaGasto(gasto)
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                } else {
+                    filaGasto(gasto)
                 }
-                .buttonStyle(.plain)
             }
 
             if editable && !evento.cerrado {
-                Button {
-                    navegador.ir(.gasto(evento, nil))
-                } label: {
+                NavigationLink(value: Ruta.gasto(evento: evento.id, gasto: nil)) {
                     HStack {
                         Text("Agregar Gasto")
                         Spacer()
@@ -63,14 +56,30 @@ struct ListaGastos: View {
             }
         }
     }
+
+    private func filaGasto(_ gasto: Gasto) -> some View {
+        HStack(spacing: 6) {
+            Text(gasto.concepto).lineLimit(1)
+            if gasto.fotoTicketID != nil {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Tema.tealOscuro)
+            }
+            Spacer()
+            Text(Dinero.texto(gasto.montoCentavos))
+        }
+        .contentShape(Rectangle())
+    }
 }
 
 // MARK: - Balance del Grupo
 
 struct BalanceGrupo: View {
     let evento: Evento
-    var editable: Bool = true
+    var acciones: AccionesCuentas? = nil
     var abierta: Bool = true
+
+    private var editable: Bool { acciones != nil && !evento.cerrado }
 
     var body: some View {
         let netos = Balance.netos(evento)
@@ -82,7 +91,8 @@ struct BalanceGrupo: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(evento.gastosOrdenados) { gasto in
-                    FilaBalanceGasto(gasto: gasto, netos: netos, editable: editable && !evento.cerrado)
+                    FilaBalanceGasto(evento: evento, gasto: gasto, netos: netos,
+                                     alternar: editable ? acciones?.alternarParte : nil)
                 }
 
                 Divider()
@@ -103,12 +113,12 @@ struct BalanceGrupo: View {
                         .foregroundStyle(Tema.tealOscuro)
                 } else {
                     ForEach(transferencias) { t in
-                        FilaTransferencia(transferencia: t, evento: evento, editable: editable && !evento.cerrado)
+                        FilaTransferencia(transferencia: t, saldar: editable ? acciones?.saldar : nil)
                     }
                 }
 
                 if !evento.pagos.isEmpty {
-                    PagosRegistrados(evento: evento, editable: editable && !evento.cerrado)
+                    PagosRegistrados(evento: evento, deshacer: editable ? acciones?.deshacerPago : nil)
                 }
             }
         }
@@ -116,9 +126,10 @@ struct BalanceGrupo: View {
 }
 
 private struct FilaBalanceGasto: View {
+    let evento: Evento
     let gasto: Gasto
-    let netos: [PersistentIdentifier: Int]
-    let editable: Bool
+    let netos: [UUID: Int]
+    let alternar: ((UUID, UUID) -> Void)?
 
     @State private var abierta = false
 
@@ -137,7 +148,8 @@ private struct FilaBalanceGasto: View {
                         Text("Pagado").foregroundStyle(Tema.tealOscuro)
                     } else {
                         Text(Dinero.texto(montoPendiente))
-                        AvataresApilados(personas: pendientes.compactMap(\.participante), tamano: 22, maximo: 3)
+                        AvataresApilados(personas: pendientes.compactMap { evento.participante($0.participanteID) },
+                                         tamano: 22, maximo: 3)
                     }
                 }
                 .contentShape(Rectangle())
@@ -152,15 +164,15 @@ private struct FilaBalanceGasto: View {
 
     private var desglose: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let pagador = gasto.pagador {
+            if let pagador = evento.participante(gasto.pagadorID) {
                 Text("Pagó \(pagador.nombre) · \(Dinero.texto(gasto.montoCentavos))")
                     .font(.fiesta(12))
                     .foregroundStyle(.secondary)
             }
-            ForEach(gasto.partes.sorted { ($0.participante?.creadoEn ?? .now) < ($1.participante?.creadoEn ?? .now) }) { parte in
-                if let persona = parte.participante {
-                    let esPagador = persona.persistentModelID == gasto.pagador?.persistentModelID
-                    let liquidada = Balance.parteLiquidada(parte, netos: netos)
+            ForEach(gasto.partes) { parte in
+                if let persona = evento.participante(parte.participanteID) {
+                    let esPagador = parte.participanteID == gasto.pagadorID
+                    let liquidada = Balance.parteLiquidada(parte, en: gasto, netos: netos)
                     HStack(spacing: 8) {
                         AvatarView(persona, tamano: 24)
                         Text(persona.primerNombre).font(.fiesta(13))
@@ -171,7 +183,7 @@ private struct FilaBalanceGasto: View {
                                 .frame(width: 78, alignment: .trailing)
                         } else {
                             Button {
-                                parte.saldada.toggle()
+                                alternar?(gasto.id, parte.participanteID)
                             } label: {
                                 Text(liquidada ? "Pagado" : "Pendiente")
                                     .font(.fiesta(12, .semibold))
@@ -181,7 +193,7 @@ private struct FilaBalanceGasto: View {
                                     .background(Capsule().fill(liquidada ? Tema.teal : .white))
                             }
                             .buttonStyle(.plain)
-                            .disabled(!editable || (liquidada && !parte.saldada))
+                            .disabled(alternar == nil || (liquidada && !parte.saldada))
                         }
                     }
                 }
@@ -194,10 +206,7 @@ private struct FilaBalanceGasto: View {
 
 private struct FilaTransferencia: View {
     let transferencia: Transferencia
-    let evento: Evento
-    let editable: Bool
-
-    @Environment(\.modelContext) private var contexto
+    let saldar: ((Transferencia) -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -210,8 +219,8 @@ private struct FilaTransferencia: View {
                 .font(.fiesta(13))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
-            if editable {
-                Button("Saldar") { saldar() }
+            if let saldar {
+                Button("Saldar") { saldar(transferencia) }
                     .font(.fiesta(12, .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
@@ -221,22 +230,11 @@ private struct FilaTransferencia: View {
             }
         }
     }
-
-    private func saldar() {
-        let pago = Pago(montoCentavos: transferencia.montoCentavos)
-        contexto.insert(pago)
-        pago.de = transferencia.de
-        pago.para = transferencia.para
-        pago.evento = evento
-        try? contexto.save()
-    }
 }
 
 private struct PagosRegistrados: View {
     let evento: Evento
-    let editable: Bool
-
-    @Environment(\.modelContext) private var contexto
+    let deshacer: ((UUID) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -247,12 +245,12 @@ private struct PagosRegistrados: View {
             ForEach(evento.pagos.sorted { $0.fecha < $1.fecha }) { pago in
                 HStack {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(Tema.teal)
-                    Text("\(pago.de?.primerNombre ?? "?") → \(pago.para?.primerNombre ?? "?")")
+                    Text("\(evento.participante(pago.deID)?.primerNombre ?? "?") → \(evento.participante(pago.paraID)?.primerNombre ?? "?")")
                     Spacer()
                     Text(Dinero.texto(pago.montoCentavos))
-                    if editable {
+                    if let deshacer {
                         Button {
-                            contexto.delete(pago)
+                            deshacer(pago.id)
                         } label: {
                             Image(systemName: "arrow.uturn.backward.circle")
                                 .foregroundStyle(Tema.tealOscuro)

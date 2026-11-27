@@ -2,21 +2,13 @@
 //  Fiestapp
 
 import SwiftUI
-import SwiftData
 
 struct PerfilView: View {
-    let perfil: Perfil?
-
-    @Environment(\.modelContext) private var contexto
+    @StateObject private var viewModel: PerfilViewModel
     @Environment(\.dismiss) private var dismiss
 
-    @State private var nombre: String
-    @State private var foto: Data?
-
-    init(perfil: Perfil?) {
-        self.perfil = perfil
-        _nombre = State(initialValue: perfil?.nombre ?? "")
-        _foto = State(initialValue: perfil?.foto)
+    init(store: FiestappStore) {
+        _viewModel = StateObject(wrappedValue: PerfilViewModel(store: store))
     }
 
     var body: some View {
@@ -35,8 +27,8 @@ struct PerfilView: View {
                 }
                 .foregroundStyle(.white)
 
-                SelectorFoto(foto: $foto, ajuste: .avatar) {
-                    AvatarView(nombre: nombre.isEmpty ? "?" : nombre, foto: foto, tamano: 120)
+                SelectorFoto(foto: $viewModel.foto, ajuste: .avatar) {
+                    AvatarView(nombre: viewModel.nombre.isEmpty ? "?" : viewModel.nombre, foto: viewModel.foto, tamano: 120)
                         .overlay(alignment: .bottomTrailing) {
                             Image(systemName: "camera.circle.fill")
                                 .font(.system(size: 34))
@@ -48,7 +40,7 @@ struct PerfilView: View {
                     Text("¿Cómo te llamas?")
                         .font(.fiesta(15, .medium))
                         .foregroundStyle(.white)
-                    TextField("Tu nombre", text: $nombre)
+                    TextField("Tu nombre", text: $viewModel.nombre)
                         .font(.fiesta(18))
                         .textInputAutocapitalization(.words)
                         .padding(14)
@@ -58,44 +50,27 @@ struct PerfilView: View {
 
                 Spacer()
 
-                Button(action: guardar) {
-                    Text(perfil == nil ? "Empezar" : "Guardar")
+                Button {
+                    viewModel.guardar()
+                    dismiss()
+                } label: {
+                    Text(viewModel.textoBoton)
                         .font(.fiesta(18, .semibold))
                         .foregroundStyle(Tema.teal)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(Capsule().fill(.white))
                 }
-                .disabled(nombre.limpio.isEmpty)
-                .opacity(nombre.limpio.isEmpty ? 0.5 : 1)
+                .disabled(!viewModel.puedeGuardar)
+                .opacity(viewModel.puedeGuardar ? 1 : 0.5)
                 .padding(.horizontal, 32)
                 .padding(.bottom, 24)
             }
         }
         .bajarTecladoAlTocarFuera()
     }
-
-    private func guardar() {
-        let nombreFinal = nombre.limpio
-        if let perfil {
-            let nombreAnterior = perfil.nombre
-            perfil.nombre = nombreFinal
-            perfil.foto = foto
-            let yoEnEventos = ((try? contexto.fetch(FetchDescriptor<Participante>())) ?? [])
-                .filter { $0.nombre == nombreAnterior }
-            for participante in yoEnEventos {
-                participante.nombre = nombreFinal
-                participante.foto = foto
-            }
-        } else {
-            contexto.insert(Perfil(nombre: nombreFinal, foto: foto))
-        }
-        try? contexto.save()
-        dismiss()
-    }
 }
 
 #Preview {
-    PerfilView(perfil: nil)
-        .modelContainer(DatosEjemplo.contenedor(vacio: true))
+    PerfilView(store: DatosEjemplo.store(vacio: true, sinPerfil: true))
 }

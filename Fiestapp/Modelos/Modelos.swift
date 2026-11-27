@@ -2,11 +2,10 @@
 //  Fiestapp
 
 import Foundation
-import SwiftData
 
-// MARK: - Enums de apoyo
+// MARK: - Enums
 
-enum TipoSalida: String, CaseIterable, Identifiable {
+enum TipoSalida: String, CaseIterable, Identifiable, Codable, Sendable {
     case comida = "Comida"
     case fiesta = "Fiesta"
     case viaje = "Viaje"
@@ -26,86 +25,94 @@ enum TipoSalida: String, CaseIterable, Identifiable {
     }
 }
 
-enum TipoDivision: String, CaseIterable, Identifiable {
+enum TipoDivision: String, CaseIterable, Identifiable, Codable, Sendable {
     case iguales = "Partes iguales"
     case personalizada = "Personalizada"
 
     var id: String { rawValue }
 }
 
-// MARK: - Perfil (el "yo" de la app)
+// MARK: - Perfil
 
-@Model
-final class Perfil {
+struct Perfil: Codable, Sendable, Equatable {
     var nombre: String
-    @Attribute(.externalStorage) var foto: Data?
+    var fotoID: String?
+}
 
-    init(nombre: String, foto: Data? = nil) {
-        self.nombre = nombre
-        self.foto = foto
+// MARK: - Amigo
+
+struct Amigo: Identifiable, Codable, Sendable, Equatable {
+    var id = UUID()
+    var nombre: String
+    var fotoID: String?
+    var creadoEn = Date.now
+}
+
+// MARK: - Participante
+
+struct Participante: Identifiable, Codable, Sendable, Equatable {
+    var id = UUID()
+    var nombre: String
+    var fotoID: String?
+    var esOrganizador = false
+    var creadoEn = Date.now
+
+    var primerNombre: String {
+        nombre.split(separator: " ").first.map(String.init) ?? nombre
     }
 }
 
-// MARK: - Amigo (tu lista de amigos guardada)
+// MARK: - Gasto
 
-@Model
-final class Amigo {
-    var nombre: String
-    @Attribute(.externalStorage) var foto: Data?
-    var creadoEn: Date
+struct Parte: Identifiable, Codable, Sendable, Equatable {
+    var participanteID: UUID
+    var montoCentavos: Int
+    var saldada = false
 
-    init(nombre: String, foto: Data? = nil) {
-        self.nombre = nombre
-        self.foto = foto
-        self.creadoEn = .now
-    }
+    var id: UUID { participanteID }
+}
+
+struct Gasto: Identifiable, Codable, Sendable, Equatable {
+    var id = UUID()
+    var concepto: String
+    var montoCentavos: Int
+    var fecha = Date.now
+    var fechaLimite = Date.now
+    var division: TipoDivision = .iguales
+    var fotoTicketID: String?
+    var pagadorID: UUID?
+    var partes: [Parte] = []
+    var creadoEn = Date.now
+}
+
+// MARK: - Pago
+
+struct Pago: Identifiable, Codable, Sendable, Equatable {
+    var id = UUID()
+    var montoCentavos: Int
+    var fecha = Date.now
+    var deID: UUID
+    var paraID: UUID
 }
 
 // MARK: - Evento
 
-@Model
-final class Evento {
+struct Evento: Identifiable, Codable, Sendable, Equatable {
+    var id = UUID()
     var nombre: String
-    var tipoRaw: String
-    var detalles: String
-    var lugar: String
+    var tipo: TipoSalida = .fiesta
+    var detalles = ""
+    var lugar = ""
     var latitud: Double?
     var longitud: Double?
-    var fecha: Date
+    var fecha = Date.now
     var fechaFin: Date?
-    var cerrado: Bool
-    @Attribute(.externalStorage) var portada: Data?
-    var creadoEn: Date
-
-    @Relationship(deleteRule: .cascade, inverse: \Participante.evento)
+    var cerrado = false
+    var portadaID: String?
     var participantes: [Participante] = []
-
-    @Relationship(deleteRule: .cascade, inverse: \Gasto.evento)
     var gastos: [Gasto] = []
-
-    @Relationship(deleteRule: .cascade, inverse: \Pago.evento)
     var pagos: [Pago] = []
-
-    init(nombre: String,
-         tipo: TipoSalida = .fiesta,
-         detalles: String = "",
-         lugar: String = "",
-         fecha: Date = .now,
-         fechaFin: Date? = nil) {
-        self.nombre = nombre
-        self.tipoRaw = tipo.rawValue
-        self.detalles = detalles
-        self.lugar = lugar
-        self.fecha = fecha
-        self.fechaFin = fechaFin
-        self.cerrado = false
-        self.creadoEn = .now
-    }
-
-    var tipo: TipoSalida {
-        get { TipoSalida(rawValue: tipoRaw) ?? .otro }
-        set { tipoRaw = newValue.rawValue }
-    }
+    var creadoEn = Date.now
 
     var fin: Date { fechaFin ?? fecha }
 
@@ -130,90 +137,9 @@ final class Evento {
     var totalCentavos: Int {
         gastos.reduce(0) { $0 + $1.montoCentavos }
     }
-}
 
-// MARK: - Participante (invitado u organizador)
-
-@Model
-final class Participante {
-    var nombre: String
-    @Attribute(.externalStorage) var foto: Data?
-    var esOrganizador: Bool
-    var creadoEn: Date
-    var evento: Evento?
-
-    init(nombre: String, foto: Data? = nil, esOrganizador: Bool = false) {
-        self.nombre = nombre
-        self.foto = foto
-        self.esOrganizador = esOrganizador
-        self.creadoEn = .now
-    }
-
-    var primerNombre: String {
-        nombre.split(separator: " ").first.map(String.init) ?? nombre
-    }
-}
-
-// MARK: - Gasto
-
-@Model
-final class Gasto {
-    var concepto: String
-    var montoCentavos: Int
-    var fecha: Date
-    var fechaLimite: Date
-    var divisionRaw: String
-    @Attribute(.externalStorage) var fotoTicket: Data?
-    var creadoEn: Date
-    var evento: Evento?
-
-    var pagador: Participante?
-
-    @Relationship(deleteRule: .cascade, inverse: \Parte.gasto)
-    var partes: [Parte] = []
-
-    init(concepto: String, montoCentavos: Int, fecha: Date = .now, fechaLimite: Date = .now, division: TipoDivision = .iguales) {
-        self.concepto = concepto
-        self.montoCentavos = montoCentavos
-        self.fecha = fecha
-        self.fechaLimite = fechaLimite
-        self.divisionRaw = division.rawValue
-        self.creadoEn = .now
-    }
-
-    var division: TipoDivision {
-        get { TipoDivision(rawValue: divisionRaw) ?? .iguales }
-        set { divisionRaw = newValue.rawValue }
-    }
-}
-
-// MARK: - Parte (lo que le toca a una persona de un gasto)
-
-@Model
-final class Parte {
-    var montoCentavos: Int
-    var saldada: Bool
-    var participante: Participante?
-    var gasto: Gasto?
-
-    init(montoCentavos: Int, saldada: Bool = false) {
-        self.montoCentavos = montoCentavos
-        self.saldada = saldada
-    }
-}
-
-// MARK: - Pago (deuda simplificada que se marcó como saldada)
-
-@Model
-final class Pago {
-    var montoCentavos: Int
-    var fecha: Date
-    var de: Participante?
-    var para: Participante?
-    var evento: Evento?
-
-    init(montoCentavos: Int) {
-        self.montoCentavos = montoCentavos
-        self.fecha = .now
+    func participante(_ id: UUID?) -> Participante? {
+        guard let id else { return nil }
+        return participantes.first { $0.id == id }
     }
 }

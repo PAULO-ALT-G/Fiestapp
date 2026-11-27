@@ -2,71 +2,55 @@
 //  Fiestapp
 
 import SwiftUI
-import SwiftData
 
 struct InicioView: View {
-    let perfil: Perfil
-
-    @Environment(Navegador.self) private var navegador
-    @Query(sort: \Evento.fecha) private var eventos: [Evento]
-
+    @EnvironmentObject private var store: FiestappStore
+    @StateObject private var viewModel = InicioViewModel()
     @Environment(\.scenePhase) private var fase
-
-    @State private var verPasados = false
-    @State private var editandoPerfil = false
-    @State private var ahora = Date.now
 
     private let columnas = [
         GridItem(.flexible(), spacing: 12),
         GridItem(.flexible(), spacing: 12)
     ]
 
-    private var eventosFiltrados: [Evento] {
-        if verPasados {
-            return eventos
-                .filter { $0.esPasado(ahora) }
-                .sorted { $0.fin > $1.fin }
-        } else {
-            return eventos.filter { !$0.esPasado(ahora) }
-        }
-    }
-
     var body: some View {
+        let eventos = viewModel.eventosVisibles(de: store.eventos)
+
         PantallaFiesta(barra: [
-            BotonBarra(titulo: "Crear", icono: "plus") { navegador.ir(.editarEvento(nil)) },
-            BotonBarra(titulo: "Activos", icono: "checkmark", activo: !verPasados) {
-                withAnimation { verPasados = false }
+            BotonBarra(titulo: "Crear", icono: "plus", destino: .editarEvento(nil)),
+            BotonBarra(titulo: "Activos", icono: "checkmark", activo: !viewModel.verPasados) {
+                withAnimation { viewModel.verPasados = false }
             },
-            BotonBarra(titulo: "Pasados", icono: "clock.arrow.circlepath", activo: verPasados) {
-                withAnimation { verPasados = true }
+            BotonBarra(titulo: "Pasados", icono: "clock.arrow.circlepath", activo: viewModel.verPasados) {
+                withAnimation { viewModel.verPasados = true }
             },
-            BotonBarra(titulo: "Amigos", icono: "person.2.fill") { navegador.ir(.amigos) }
+            BotonBarra(titulo: "Amigos", icono: "person.2.fill", destino: .amigos)
         ]) {
             HStack {
-                Text(perfil.nombre)
+                Text(store.perfil?.nombre ?? "")
                     .font(.fiesta(30, .medium))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                 Spacer()
-                Button { editandoPerfil = true } label: {
-                    AvatarView(nombre: perfil.nombre, foto: perfil.foto, tamano: 54)
+                Button { viewModel.editandoPerfil = true } label: {
+                    AvatarView(nombre: store.perfil?.nombre ?? "", foto: store.perfil?.foto, tamano: 54)
                 }
             }
             .padding(.top, 20)
         } contenido: {
             VStack(spacing: 14) {
-                Text(verPasados ? "Pasados" : "Activos")
+                Text(viewModel.tituloSeccion)
                     .font(.fiesta(14))
                     .foregroundStyle(Tema.texto.opacity(0.7))
                     .frame(maxWidth: .infinity)
 
-                if eventosFiltrados.isEmpty {
+                if eventos.isEmpty {
                     estadoVacio
                 } else {
                     LazyVGrid(columns: columnas, spacing: 12) {
-                        ForEach(eventosFiltrados) { evento in
-                            Button { navegador.ir(.detalle(evento)) } label: {
+                        ForEach(eventos) { evento in
+                            NavigationLink(value: Ruta.detalle(evento.id)) {
                                 TarjetaEvento(evento: evento)
                             }
                             .buttonStyle(.plain)
@@ -76,29 +60,29 @@ struct InicioView: View {
                 }
             }
         }
-        .sheet(isPresented: $editandoPerfil) {
-            PerfilView(perfil: perfil)
+        .sheet(isPresented: $viewModel.editandoPerfil) {
+            PerfilView(store: store)
         }
-        .onAppear { ahora = .now }
+        .onAppear { viewModel.actualizarHora() }
         .onChange(of: fase) { _, nuevaFase in
-            if nuevaFase == .active { ahora = .now }
+            if nuevaFase == .active { viewModel.actualizarHora() }
         }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
-                ahora = .now
+                viewModel.actualizarHora()
             }
         }
     }
 
     private var estadoVacio: some View {
         VStack(spacing: 12) {
-            Image(systemName: verPasados ? "archivebox" : "party.popper")
+            Image(systemName: viewModel.verPasados ? "archivebox" : "party.popper")
                 .font(.system(size: 44))
                 .foregroundStyle(Tema.teal)
-            Text(verPasados ? "Aún no tienes eventos pasados" : "No tienes eventos activos")
+            Text(viewModel.mensajeVacio)
                 .font(.fiesta(16, .medium))
-            if !verPasados {
+            if !viewModel.verPasados {
                 Text("Toca **Crear** para organizar tu primera salida.")
                     .font(.fiesta(14))
                     .foregroundStyle(.secondary)
@@ -181,10 +165,9 @@ struct TarjetaEvento: View {
 }
 
 #Preview {
-    let contenedor = DatosEjemplo.contenedor()
-    return NavigationStack {
-        InicioView(perfil: DatosEjemplo.perfil(en: contenedor))
+    NavigationStack {
+        InicioView()
     }
-    .environment(Navegador())
-    .modelContainer(contenedor)
+    .environmentObject(DatosEjemplo.store())
+    .environmentObject(Navegador())
 }

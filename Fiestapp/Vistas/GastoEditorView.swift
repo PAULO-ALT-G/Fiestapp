@@ -2,89 +2,32 @@
 //  Fiestapp
 
 import SwiftUI
-import SwiftData
 
 struct GastoEditorView: View {
-    let evento: Evento
-    let gasto: Gasto?
+    @EnvironmentObject private var navegador: Navegador
+    @EnvironmentObject private var store: FiestappStore
+    @StateObject private var viewModel: GastoEditorViewModel
 
-    @Environment(Navegador.self) private var navegador
-    @Environment(\.modelContext) private var contexto
-
-    @State private var concepto: String
-    @State private var montoTexto: String
-    @State private var fecha: Date
-    @State private var fechaLimite: Date
-    @State private var division: TipoDivision
-    @State private var seleccionados: Set<PersistentIdentifier>
-    @State private var montosPersonalizados: [PersistentIdentifier: String]
-    @State private var pagadorID: PersistentIdentifier?
-    @State private var foto: Data?
-
-    @State private var agregandoInvitado = false
-    @State private var alerta: String?
-    @State private var confirmarBorrado = false
-    @State private var verFotoCompleta = false
-
-    init(evento: Evento, gasto: Gasto?) {
-        self.evento = evento
-        self.gasto = gasto
-
-        _concepto = State(initialValue: gasto?.concepto ?? "")
-        _montoTexto = State(initialValue: gasto.map { Dinero.textoEditable($0.montoCentavos) } ?? "")
-        _fecha = State(initialValue: gasto?.fecha ?? .now)
-        _fechaLimite = State(initialValue: gasto?.fechaLimite ?? max(evento.fecha, .now))
-        _division = State(initialValue: gasto?.division ?? .iguales)
-        _foto = State(initialValue: gasto?.fotoTicket)
-        _pagadorID = State(initialValue: gasto?.pagador?.persistentModelID ?? evento.organizador?.persistentModelID)
-
-        if let gasto {
-            _seleccionados = State(initialValue: Set(gasto.partes.compactMap { $0.participante?.persistentModelID }))
-            var montos: [PersistentIdentifier: String] = [:]
-            for parte in gasto.partes {
-                if let id = parte.participante?.persistentModelID {
-                    montos[id] = Dinero.textoEditable(parte.montoCentavos)
-                }
-            }
-            _montosPersonalizados = State(initialValue: montos)
-        } else {
-            _seleccionados = State(initialValue: Set(evento.participantes.map(\.persistentModelID)))
-            _montosPersonalizados = State(initialValue: [:])
-        }
+    init(eventoID: UUID, gastoID: UUID?, store: FiestappStore) {
+        _viewModel = StateObject(wrappedValue: GastoEditorViewModel(eventoID: eventoID, gastoID: gastoID, store: store))
     }
-
-    // MARK: - Datos calculados
-
-    private var personas: [Participante] { evento.participantesOrdenados }
-
-    private var elegidos: [Participante] {
-        personas.filter { seleccionados.contains($0.persistentModelID) }
-    }
-
-    private var totalCentavos: Int { Dinero.centavos(de: montoTexto) ?? 0 }
-
-    private var sumaPersonalizada: Int {
-        elegidos.reduce(0) { suma, persona in
-            suma + (Dinero.centavos(de: montosPersonalizados[persona.persistentModelID] ?? "") ?? 0)
-        }
-    }
-
-    // MARK: - Vista
 
     var body: some View {
         PantallaFiesta(barra: [
             BotonBarra(titulo: "Detalles", icono: "arrow.left") { navegador.atras() },
-            BotonBarra(titulo: "Ticket", icono: "paperclip", activo: true) {},
-            BotonBarra(titulo: "Listo", icono: "checkmark", deshabilitado: evento.cerrado) { guardar() }
+            BotonBarra(titulo: "Ticket", icono: "paperclip", activo: true),
+            BotonBarra(titulo: "Listo", icono: "checkmark", deshabilitado: viewModel.cerrado) {
+                if viewModel.guardar() { navegador.atras() }
+            }
         ]) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(gasto == nil ? "Registrar Gasto" : "Editar Gasto").font(.fiesta(13))
+                    Text(viewModel.esNuevo ? "Registrar Gasto" : "Editar Gasto").font(.fiesta(13))
                     Text("Ticket").font(.fiesta(30, .medium))
                 }
                 Spacer()
-                if gasto != nil && !evento.cerrado {
-                    Button { confirmarBorrado = true } label: {
+                if !viewModel.esNuevo && !viewModel.cerrado {
+                    Button { viewModel.confirmarBorrado = true } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 18, weight: .semibold))
                     }
@@ -101,25 +44,16 @@ struct GastoEditorView: View {
                 divisor
                 seccionRecibo
             }
-            .disabled(evento.cerrado)
+            .disabled(viewModel.cerrado)
         }
-        .sheet(isPresented: $agregandoInvitado) {
-            ElegirInvitadosSheet(yaInvitados: evento.participantes.map(\.nombre)) { nuevos in
-                var agregados: [Participante] = []
-                for nuevo in nuevos {
-                    let persona = Participante(nombre: nuevo.nombre, foto: nuevo.foto)
-                    contexto.insert(persona)
-                    persona.evento = evento
-                    agregados.append(persona)
-                }
-                try? contexto.save()
-                for persona in agregados {
-                    seleccionados.insert(persona.persistentModelID)
-                }
+        .task { await viewModel.cargarSugerencias() }
+        .sheet(isPresented: $viewModel.agregandoInvitado) {
+            ElegirInvitadosSheet(store: store, yaInvitados: viewModel.personas.map(\.nombre)) { nuevos in
+                viewModel.agregarInvitados(nuevos)
             }
         }
-        .sheet(isPresented: $verFotoCompleta) {
-            if let foto, let ui = UIImage(data: foto) {
+        .sheet(isPresented: $viewModel.verFotoCompleta) {
+            if let foto = viewModel.foto, let ui = UIImage(data: foto) {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFit()
@@ -127,13 +61,19 @@ struct GastoEditorView: View {
                     .presentationDragIndicator(.visible)
             }
         }
-        .alert("Revisa el gasto", isPresented: Binding(get: { alerta != nil }, set: { if !$0 { alerta = nil } })) {
+        .alert("Revisa el gasto", isPresented: Binding(
+            get: { viewModel.alerta != nil },
+            set: { if !$0 { viewModel.alerta = nil } }
+        )) {
             Button("Ok", role: .cancel) {}
         } message: {
-            Text(alerta ?? "")
+            Text(viewModel.alerta ?? "")
         }
-        .confirmationDialog("¿Eliminar este gasto?", isPresented: $confirmarBorrado, titleVisibility: .visible) {
-            Button("Eliminar gasto", role: .destructive) { eliminar() }
+        .confirmationDialog("¿Eliminar este gasto?", isPresented: $viewModel.confirmarBorrado, titleVisibility: .visible) {
+            Button("Eliminar gasto", role: .destructive) {
+                viewModel.eliminar()
+                navegador.atras()
+            }
         }
     }
 
@@ -141,29 +81,35 @@ struct GastoEditorView: View {
         Rectangle().fill(Tema.teal).frame(height: 2).padding(.vertical, 14)
     }
 
+    // MARK: - Formulario
+
     private var formulario: some View {
         VStack(spacing: 4) {
             Rectangle().fill(Tema.teal).frame(height: 2).padding(.bottom, 8)
             fila("Concepto") {
-                TextField("Comida", text: $concepto)
+                TextField("Comida", text: $viewModel.concepto)
                     .multilineTextAlignment(.trailing)
             }
+            SugerenciasView(estado: viewModel.sugerencias,
+                            elegir: { viewModel.usarSugerencia($0) },
+                            reintentar: { Task { await viewModel.cargarSugerencias() } })
+                .padding(.vertical, 4)
             fila("Monto") {
                 HStack(spacing: 2) {
                     Text("$")
-                        .foregroundStyle(montoTexto.isEmpty ? Color.secondary : Tema.texto)
-                    TextField("0", text: $montoTexto)
+                        .foregroundStyle(viewModel.montoTexto.isEmpty ? Color.secondary : Tema.texto)
+                    TextField("0", text: $viewModel.montoTexto)
                         .keyboardType(.decimalPad)
                         .fixedSize(horizontal: true, vertical: false)
                         .frame(minWidth: 30, alignment: .leading)
                 }
             }
             fila("Fecha") {
-                DatePicker("Fecha", selection: $fecha, displayedComponents: .date)
+                DatePicker("Fecha", selection: $viewModel.fecha, displayedComponents: .date)
                     .labelsHidden()
             }
             fila("Fecha límite de pago") {
-                DatePicker("Fecha límite de pago", selection: $fechaLimite, displayedComponents: .date)
+                DatePicker("Fecha límite de pago", selection: $viewModel.fechaLimite, displayedComponents: .date)
                     .labelsHidden()
             }
         }
@@ -182,6 +128,8 @@ struct GastoEditorView: View {
         .frame(minHeight: 38)
     }
 
+    // MARK: - División
+
     private var seccionDivision: some View {
         VStack(spacing: 12) {
             Text("¿Entre quiénes se divide?")
@@ -190,13 +138,10 @@ struct GastoEditorView: View {
 
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 10) {
-                    BotonMas(tamano: 46) { agregandoInvitado = true }
-                    ForEach(personas) { persona in
-                        let activo = seleccionados.contains(persona.persistentModelID)
-                        Button {
-                            if activo { seleccionados.remove(persona.persistentModelID) }
-                            else { seleccionados.insert(persona.persistentModelID) }
-                        } label: {
+                    BotonMas(tamano: 46) { viewModel.agregandoInvitado = true }
+                    ForEach(viewModel.personas) { persona in
+                        let activo = viewModel.seleccionados.contains(persona.id)
+                        Button { viewModel.alternar(persona) } label: {
                             VStack(spacing: 4) {
                                 AvatarView(persona, tamano: 46)
                                     .opacity(activo ? 1 : 0.35)
@@ -221,15 +166,15 @@ struct GastoEditorView: View {
             }
             .scrollIndicators(.hidden)
 
-            Picker("División", selection: $division) {
+            Picker("División", selection: $viewModel.division) {
                 ForEach(TipoDivision.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 20)
 
-            if division == .iguales {
-                if !elegidos.isEmpty && totalCentavos > 0 {
-                    Text("A cada quien le tocan aprox. \(Dinero.texto(totalCentavos / elegidos.count))")
+            if viewModel.division == .iguales {
+                if let texto = viewModel.textoPorPersona {
+                    Text(texto)
                         .font(.fiesta(13))
                         .foregroundStyle(.secondary)
                 }
@@ -241,7 +186,7 @@ struct GastoEditorView: View {
 
     private var montosPorPersona: some View {
         VStack(spacing: 8) {
-            ForEach(elegidos) { persona in
+            ForEach(viewModel.elegidos) { persona in
                 HStack {
                     AvatarView(persona, tamano: 28)
                     Text(persona.nombre).font(.fiesta(14))
@@ -249,8 +194,8 @@ struct GastoEditorView: View {
                     HStack(spacing: 2) {
                         Text("$").foregroundStyle(.secondary)
                         TextField("0", text: Binding(
-                            get: { montosPersonalizados[persona.persistentModelID] ?? "" },
-                            set: { montosPersonalizados[persona.persistentModelID] = $0 }
+                            get: { viewModel.montosPersonalizados[persona.id] ?? "" },
+                            set: { viewModel.montosPersonalizados[persona.id] = $0 }
                         ))
                         .keyboardType(.decimalPad)
                     }
@@ -260,13 +205,15 @@ struct GastoEditorView: View {
                     .background(RoundedRectangle(cornerRadius: 8).fill(.white))
                 }
             }
-            let restante = totalCentavos - sumaPersonalizada
+            let restante = viewModel.restantePersonalizado
             Text(restante == 0 ? "¡Cuadra exacto!" : "Faltan por asignar \(Dinero.texto(restante))")
                 .font(.fiesta(13, .medium))
                 .foregroundStyle(restante == 0 ? Tema.tealOscuro : .orange)
         }
         .padding(.horizontal, 24)
     }
+
+    // MARK: - Pagador
 
     private var seccionPagador: some View {
         VStack(spacing: 12) {
@@ -275,9 +222,9 @@ struct GastoEditorView: View {
                 .foregroundStyle(Tema.texto)
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 10) {
-                    ForEach(personas) { persona in
-                        let activo = pagadorID == persona.persistentModelID
-                        Button { pagadorID = persona.persistentModelID } label: {
+                    ForEach(viewModel.personas) { persona in
+                        let activo = viewModel.pagadorID == persona.id
+                        Button { viewModel.pagadorID = persona.id } label: {
                             VStack(spacing: 4) {
                                 AvatarView(persona, tamano: 46, borde: activo ? Tema.teal : .white)
                                     .overlay(Circle().stroke(Tema.teal, lineWidth: activo ? 3 : 0).padding(-3))
@@ -299,6 +246,8 @@ struct GastoEditorView: View {
         }
     }
 
+    // MARK: - Recibo
+
     private var seccionRecibo: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Recibo")
@@ -308,15 +257,15 @@ struct GastoEditorView: View {
 
             HStack {
                 Spacer()
-                if let foto, let ui = UIImage(data: foto) {
+                if let foto = viewModel.foto, let ui = UIImage(data: foto) {
                     Image(uiImage: ui)
                         .resizable()
                         .scaledToFill()
                         .frame(width: 150, height: 190)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .onTapGesture { verFotoCompleta = true }
+                        .onTapGesture { viewModel.verFotoCompleta = true }
                         .overlay(alignment: .bottomTrailing) {
-                            SelectorFoto(foto: $foto, permitirEscaner: true, ajuste: .libre) {
+                            SelectorFoto(foto: $viewModel.foto, permitirEscaner: true, ajuste: .libre) {
                                 Image(systemName: "plus.circle.fill")
                                     .font(.system(size: 26))
                                     .foregroundStyle(.white, Tema.teal)
@@ -324,7 +273,7 @@ struct GastoEditorView: View {
                             }
                         }
                 } else {
-                    SelectorFoto(foto: $foto, permitirEscaner: true, ajuste: .libre) {
+                    SelectorFoto(foto: $viewModel.foto, permitirEscaner: true, ajuste: .libre) {
                         VStack(spacing: 8) {
                             Image(systemName: "doc.viewfinder")
                                 .font(.system(size: 30))
@@ -344,94 +293,23 @@ struct GastoEditorView: View {
             }
         }
     }
-
-    // MARK: - Acciones
-
-    private func guardar() {
-        let conceptoFinal = concepto.limpio
-        guard !conceptoFinal.isEmpty else { alerta = "Escribe el concepto del gasto."; return }
-        guard let total = Dinero.centavos(de: montoTexto), total > 0 else { alerta = "Escribe un monto válido."; return }
-        guard !elegidos.isEmpty else { alerta = "Elige al menos a una persona para dividir."; return }
-        guard let pagador = personas.first(where: { $0.persistentModelID == pagadorID }) else {
-            alerta = "Elige quién pagó."; return
-        }
-
-        var montos: [Int]
-        switch division {
-        case .iguales:
-            let idsElegidos = Set(elegidos.map(\.persistentModelID))
-            let idsAnteriores = Set(gasto?.partes.compactMap { $0.participante?.persistentModelID } ?? [])
-            if let gasto, gasto.division == .iguales, gasto.montoCentavos == total, idsAnteriores == idsElegidos {
-                montos = elegidos.map { persona in
-                    gasto.partes.first { $0.participante?.persistentModelID == persona.persistentModelID }?.montoCentavos ?? 0
-                }
-            } else {
-                montos = Balance.dividirIguales(totalCentavos: total, entre: elegidos.count)
-            }
-        case .personalizada:
-            montos = elegidos.map { Dinero.centavos(de: montosPersonalizados[$0.persistentModelID] ?? "") ?? 0 }
-            let suma = montos.reduce(0, +)
-            guard suma == total else {
-                alerta = "Los montos suman \(Dinero.texto(suma)) pero el gasto es de \(Dinero.texto(total))."
-                return
-            }
-        }
-
-        let destino: Gasto
-        if let gasto {
-            destino = gasto
-        } else {
-            destino = Gasto(concepto: conceptoFinal, montoCentavos: total)
-            contexto.insert(destino)
-            destino.evento = evento
-        }
-
-        destino.concepto = conceptoFinal
-        destino.montoCentavos = total
-        destino.fecha = fecha
-        destino.fechaLimite = fechaLimite
-        destino.division = division
-        destino.fotoTicket = foto
-        destino.pagador = pagador
-
-        let yaPagaron = Set(destino.partes.filter(\.saldada).compactMap { $0.participante?.persistentModelID })
-        for parte in destino.partes { contexto.delete(parte) }
-        destino.partes.removeAll()
-
-        for (persona, monto) in zip(elegidos, montos) {
-            let parte = Parte(montoCentavos: monto, saldada: yaPagaron.contains(persona.persistentModelID))
-            contexto.insert(parte)
-            parte.participante = persona
-            parte.gasto = destino
-        }
-
-        try? contexto.save()
-        navegador.atras()
-    }
-
-    private func eliminar() {
-        guard let gasto else { return }
-        contexto.delete(gasto)
-        try? contexto.save()
-        navegador.atras()
-    }
 }
 
 #Preview("Nuevo") {
-    let contenedor = DatosEjemplo.contenedor()
+    let store = DatosEjemplo.store()
     return NavigationStack {
-        GastoEditorView(evento: DatosEjemplo.evento(en: contenedor), gasto: nil)
+        GastoEditorView(eventoID: DatosEjemplo.eventoConGastos(en: store), gastoID: nil, store: store)
     }
-    .environment(Navegador())
-    .modelContainer(contenedor)
+    .environmentObject(store)
+    .environmentObject(Navegador())
 }
 
 #Preview("Editar") {
-    let contenedor = DatosEjemplo.contenedor()
-    let evento = DatosEjemplo.evento(en: contenedor)
+    let store = DatosEjemplo.store()
+    let evento = store.evento(DatosEjemplo.eventoConGastos(en: store))
     return NavigationStack {
-        GastoEditorView(evento: evento, gasto: evento.gastosOrdenados.first)
+        GastoEditorView(eventoID: evento?.id ?? UUID(), gastoID: evento?.gastosOrdenados.first?.id, store: store)
     }
-    .environment(Navegador())
-    .modelContainer(contenedor)
+    .environmentObject(store)
+    .environmentObject(Navegador())
 }
